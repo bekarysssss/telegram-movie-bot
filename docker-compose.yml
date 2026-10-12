@@ -1,0 +1,50 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-movies}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-movies}
+      POSTGRES_DB: ${POSTGRES_DB:-movies}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-movies} -d ${POSTGRES_DB:-movies}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+
+  migrate:               # одноразовый контейнер: применяет миграции и завершается
+    build: .
+    env_file: .env
+    command: alembic upgrade head
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: python -m app.bot.main
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+
+  admin:                 # веб-админка: http://localhost:8000/admin
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: uvicorn app.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "127.0.0.1:8000:8000"   # наружу — только через nginx/Caddy с HTTPS
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+volumes:
+  pgdata:
+  redisdata:
